@@ -57,6 +57,7 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <vector>
 #include <iostream>
+#include <numeric> 
 
 #include "ORBextractor.h"
 
@@ -407,35 +408,105 @@ namespace ORB_SLAM3
             7, 0, 12, -2 /*mean (0.127002), correlation (0.537452)*/,
             -1, -6, 0, -11 /*mean (0.127148), correlation (0.547401)*/
     };
-    double ORBextractor::ComputeAdaptiveThreshold(const cv::Mat &image, double omega, double highThreshold, double lowThresholdDivisor)
+
+
+
+
+
+    // tag-change
+    double ORBextractor::ComputeAdaptiveThreshold(const cv::Mat& subregion, int subregion_size)
     {
-        // Kiểm tra nếu hình ảnh không rỗng
-        if (image.empty())
+        if (subregion.empty())
         {
-            throw std::invalid_argument("Hình ảnh không được rỗng");
+            throw std::invalid_argument("Subregion cannot be empty");
+        }   
+        std::vector<cv::Mat> channels;
+        cv::split(subregion, channels); 
+        cv::Mat gray;
+        if (channels.size() > 1) {
+            cv::cvtColor(subregion, gray, cv::COLOR_BGR2GRAY);  
+        } else {
+            gray = subregion;
         }
 
-        // Tính giá trị trung bình cường độ pixel và độ lệch chuẩn
-        cv::Mat meanMat, stddevMat;
-        cv::meanStdDev(image, meanMat, stddevMat);
-        double mean = meanMat.at<double>(0);
-        double stdDev = stddevMat.at<double>(0);
+        cv::Mat hist;
+        int histSize = 256;
+        float range[] = { 0, 256 };  
+        const float* histRange = { range };
+        bool uniform = true, accumulate = false;
+        cv::calcHist(&gray, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, uniform, accumulate);
 
-        // Tính ngưỡng FAST thích ứng dựa trên độ lệch chuẩn
-        double threshold;
-        if (stdDev > 0.25)
-        {
-            // Độ tương phản cao
-            threshold = omega * stdDev + highThreshold;
-        }
-        else
-        {
-            // Độ tương phản thấp
-            threshold = (omega * stdDev) / lowThresholdDivisor;
+        
+        std::vector<double> histVector(histSize);
+        for (int i = 0; i < histSize; ++i) {
+            histVector[i] = hist.at<float>(i);
         }
 
-        return threshold;
+        double histSum = std::accumulate(histVector.begin(), histVector.end(), 0.0);
+        for (auto& val : histVector) {
+            val /= histSum;  
+        }
+        
+        int t_optimal = calculateThreshold(histVector);
+
+        int I_mid = 0;
+        try {
+            I_mid = subregion.at<uchar>(subregion_size / 2, subregion_size / 2);
+        } catch (...) {
+            I_mid = 0; 
+        }
+
+        int C_prime = calculateCPrime(I_mid, t_optimal);
+
+        return C_prime;
     }
+    int ORBextractor::calculateThreshold(const std::vector<double>& hist) {
+        int K = hist.size();
+        std::vector<double> P = hist;
+        std::vector<double> cumulative_P(K, 0);
+        std::vector<double> cumulative_mean(K, 0);
+
+        cumulative_P[0] = P[0];
+        for (int i = 1; i < K; ++i) {
+            cumulative_P[i] = cumulative_P[i - 1] + P[i];
+        }
+
+        for (int i = 0; i < K; ++i) {
+            cumulative_mean[i] = (i * P[i]);
+            if (i > 0) cumulative_mean[i] += cumulative_mean[i - 1];
+        }
+
+        double total_mean = cumulative_mean[K - 1];
+
+        std::vector<double> f_t(K, 0);
+        for (int t = 0; t < K; ++t) {
+            double numerator = std::pow((cumulative_P[t] * total_mean - cumulative_mean[t]), 2);
+            double denominator = cumulative_P[t] * (1 - cumulative_P[t]);
+
+            if (denominator > 0) {
+                f_t[t] = numerator / denominator;
+            }
+        }
+
+        int t_optimal = std::distance(f_t.begin(), std::max_element(f_t.begin(), f_t.end()));
+
+        return t_optimal;
+    }
+
+    int ORBextractor::calculateCPrime(int I_mid, int t, double a , int C_min ) {
+        double C = a * std::abs(I_mid - t);
+        double C_prime = std::max(C, static_cast<double>(C_min));
+        return static_cast<int>(C_prime);
+    }
+
+
+
+
+
+
+
+
+
     ORBextractor::ORBextractor(int _nfeatures, float _scaleFactor, int _nlevels,
                                int _iniThFAST, int _minThFAST) : nfeatures(_nfeatures), scaleFactor(_scaleFactor), nlevels(_nlevels),
                                                                  iniThFAST(_iniThFAST), minThFAST(_minThFAST)
@@ -835,9 +906,9 @@ namespace ORB_SLAM3
             const int nRows = height / W;
             const int wCell = ceil(width / nCols);
             const int hCell = ceil(height / nRows);
-
-            // Tính ngưỡng thích nghi cho cấp độ hiện tại
-            adaptiveThFAST = ComputeAdaptiveThreshold(mvImagePyramid[level]);
+            
+            adaptiveThFAST = ComputeAdaptiveThreshold(mvImagePyramid[level],W); // tag-change
+            // adaptiveThFAST = 20;
 
             for (int i = 0; i < nRows; i++)
             {
@@ -860,9 +931,8 @@ namespace ORB_SLAM3
 
                     vector<cv::KeyPoint> vKeysCell;
 
-                    // Sử dụng ngưỡng thích nghi khi phát hiện keypoints
                     FAST(mvImagePyramid[level].rowRange(iniY, maxY).colRange(iniX, maxX),
-                         vKeysCell, adaptiveThFAST, true);
+                         vKeysCell, adaptiveThFAST, true); // tag-change
 
                     // FAST(mvImagePyramid[level].rowRange(iniY, maxY).colRange(iniX, maxX),
                     //      vKeysCell, iniThFAST, true);

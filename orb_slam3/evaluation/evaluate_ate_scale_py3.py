@@ -6,8 +6,8 @@ import associate_py3 as associate
 
 import matplotlib
 
-# matplotlib.use("Agg")
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
+# matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import matplotlib.pylab as pylab
 from matplotlib.patches import Ellipse
@@ -85,6 +85,21 @@ def align(model, data):
     trans_error = np.sqrt(np.sum(np.square(alignment_error), axis=0))
 
     return rot, transGT, trans_errorGT, trans, trans_error, s
+
+
+def calculate_rms(gt_trajectory, pred_trajectory):
+    # Ensure both trajectories have the same number of points
+    min_length = min(gt_trajectory.shape[1], pred_trajectory.shape[1])
+    gt_trajectory = gt_trajectory[:, :min_length]
+    pred_trajectory = pred_trajectory[:, :min_length]
+
+    # Compute the error
+    error = np.linalg.norm(gt_trajectory - pred_trajectory, axis=1)
+
+    # Compute RMS
+    rms = np.sqrt(np.mean(error**2))
+
+    return rms
 
 
 def plot_traj(ax, stamps, traj, style, color, label):
@@ -239,6 +254,13 @@ if __name__ == "__main__":
         ]
     ).transpose()
     second_xyz_full_aligned = scale * rot * second_xyz_full + trans
+
+    print(
+        numpy.sqrt(numpy.dot(trans_error, trans_error) / len(trans_error)),
+        scale,
+        numpy.sqrt(numpy.dot(trans_errorGT, trans_errorGT) / len(trans_errorGT)),
+        calculate_rms(first_xyz_full, second_xyz_full_aligned),
+    )
 
     if args.save_associations:
         file = open(args.save_associations, "w")

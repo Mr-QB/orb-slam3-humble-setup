@@ -102,12 +102,17 @@ namespace ORB_SLAM3
         std::vector<cv::Point> pattern;
 
         int nfeatures;
-        double adaptiveThFAST; // Ngưỡng FAST thích nghi mới
-        double ComputeAdaptiveThreshold(const cv::Mat &image, double omega = 128.0, double highThreshold = 20.0, double lowThresholdDivisor = 2.0);
         double scaleFactor;
         int nlevels;
         int iniThFAST;
         int minThFAST;
+
+        // tag-change
+        double adaptiveThFAST; 
+        double ComputeAdaptiveThreshold(const cv::Mat& subregion, int subregion_size);
+        int calculateThreshold(const std::vector<double>& hist);
+        int calculateCPrime(int I_mid, int t, double a = 0.3, int C_min = 7);
+
 
         std::vector<int> mnFeaturesPerLevel;
 

@@ -22,6 +22,12 @@
 #include <chrono>
 
 #include <opencv2/core/core.hpp>
+#include <opencv2/opencv.hpp>
+
+#include <vector>
+#include <cmath>
+#include <numeric>
+
 
 #include <System.h>
 
@@ -29,6 +35,12 @@ using namespace std;
 
 void LoadImages(const string &strImagePath, const string &strPathTimes,
                 vector<string> &vstrImages, vector<double> &vTimeStamps);
+
+cv::Mat calculate_histogram(const cv::Mat& image);
+cv::Mat adjust_gamma(const cv::Mat& image, const std::vector<float>& gamma_values);
+cv::Mat create_contrast_mask(const cv::Mat& original_image, const cv::Mat& adjusted_image);
+std::pair<cv::Mat, cv::Mat> adaptive_gamma_adjustment(const cv::Mat& image, float alpha = 0.2, float tau = 0.5);
+std::pair<cv::Mat, cv::Mat> unsharp_mask(const cv::Mat& image, float alpha = 1.0f);
 
 int main(int argc, char **argv)
 {
@@ -63,12 +75,14 @@ int main(int argc, char **argv)
     for (seq = 0; seq < num_seq; seq++)
     {
         cout << "Loading images for sequence " << seq << "...";
-        LoadImages(string(argv[(2 * seq) + 3]) + "/mav0/cam1/data", string(argv[(2 * seq) + 4]), vstrImageFilenames[seq], vTimestampsCam[seq]);
+        LoadImages(string(argv[(2 * seq) + 3]) + "/mav0/cam0/data", string(argv[(2 * seq) + 4]), vstrImageFilenames[seq], vTimestampsCam[seq]);
         cout << "LOADED!" << endl;
 
         nImages[seq] = vstrImageFilenames[seq].size();
         tot_images += nImages[seq];
     }
+    // cout << "Number of images: " << tot_images.size() << endl;
+    
 
     // Vector for tracking time statistics
     vector<float> vTimesTrack;
@@ -100,11 +114,14 @@ int main(int argc, char **argv)
             im = cv::imread(vstrImageFilenames[seq][ni], cv::IMREAD_UNCHANGED); //,CV_LOAD_IMAGE_UNCHANGED);
             double tframe = vTimestampsCam[seq][ni];
 
+
+
             if (im.empty())
             {
                 cerr << endl
                      << "Failed to load image at: "
                      << vstrImageFilenames[seq][ni] << endl;
+
                 return 1;
             }
 
@@ -120,6 +137,15 @@ int main(int argc, char **argv)
                 int width = im.cols * imageScale;
                 int height = im.rows * imageScale;
                 cv::resize(im, im, cv::Size(width, height));
+
+                // tag-change
+                // std::pair<cv::Mat, cv::Mat> gamma_result = adaptive_gamma_adjustment(im, 1.9, 0.5);
+                // cv::Mat adjusted_image= gamma_result.first;
+                // cv::Mat contrast_mask =  create_contrast_mask(im,adjusted_image);
+                // cv::Mat sharpened_image = unsharp_mask(contrast_mask, 1.5).first;
+                // im=sharpened_image;
+
+
 #ifdef REGISTER_TIMES
 #ifdef COMPILEDWITHC11
                 std::chrono::steady_clock::time_point t_End_Resize = std::chrono::steady_clock::now();
@@ -226,4 +252,86 @@ void LoadImages(const string &strImagePath, const string &strPathTimes,
             vTimeStamps.push_back(t * 1e-9);
         }
     }
+
+}
+
+cv::Mat calculate_histogram(const cv::Mat& image) {
+    cv::Mat hist;
+
+    int histSize = 256;                
+    float range[] = {0.0f, 256.0f};   
+    const float* histRange = range;    
+
+    cv::calcHist(&image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange);
+
+    hist /= cv::sum(hist)[0];
+
+    return hist;
+}
+
+cv::Mat adjust_gamma(const cv::Mat& image, const std::vector<float>& gamma_values) {
+    cv::Mat gray_image;
+    cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
+    cv::Mat adjusted_image = cv::Mat::zeros(image.size(), image.type());
+
+    for (int i = 0; i < gray_image.rows; ++i) {
+        for (int j = 0; j < gray_image.cols; ++j) {
+            uchar pixel_value = gray_image.at<uchar>(i, j);
+            float gamma = gamma_values[pixel_value];
+            cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
+            adjusted_image.at<cv::Vec3b>(i, j) = cv::Vec3b(
+                cv::saturate_cast<uchar>(255 * std::pow(pixel[0] / 255.0f, gamma)),
+                cv::saturate_cast<uchar>(255 * std::pow(pixel[1] / 255.0f, gamma)),
+                cv::saturate_cast<uchar>(255 * std::pow(pixel[2] / 255.0f, gamma))
+            );
+        }
+    }
+    return adjusted_image;
+}
+
+cv::Mat create_contrast_mask(const cv::Mat& original_image, const cv::Mat& adjusted_image) {
+    return adjusted_image - original_image;
+}
+
+std::pair<cv::Mat, cv::Mat> adaptive_gamma_adjustment(const cv::Mat& image, float alpha , float tau ) {
+    cv::Mat gray_image = image.clone();
+    cv::Mat hist = calculate_histogram(gray_image);
+
+    int n = gray_image.total();
+    std::vector<float> P_i(hist.rows);
+    for (int i = 0; i < hist.rows; ++i) {
+        P_i[i] = hist.at<float>(i, 0) * (1.0f / n);
+    }
+
+    float P_max = *std::max_element(P_i.begin(), P_i.end());
+    float P_min = *std::min_element(P_i.begin(), P_i.end());
+    std::vector<float> P_w(P_i.size());
+    for (size_t i = 0; i < P_i.size(); ++i) {
+        P_w[i] = P_max * std::pow((P_i[i] - P_min) / (P_max - P_min), alpha);
+    }
+    std::vector<float> C_w(P_w.size());
+    std::partial_sum(P_w.begin(), P_w.end(), C_w.begin());
+    float total_Pw = std::accumulate(P_w.begin(), P_w.end(), 0.0f);
+    for (float& cw : C_w) {
+        cw /= total_Pw;
+    }
+
+    std::vector<float> gamma_values(C_w.size());
+    for (size_t i = 0; i < C_w.size(); ++i) {
+        gamma_values[i] = std::max(tau, 1.0f - C_w[i]);
+    }
+
+    cv::Mat adjusted_image = adjust_gamma(gray_image, gamma_values);
+
+    cv::Mat contrast_mask = create_contrast_mask(gray_image, adjusted_image);
+
+    return {adjusted_image, contrast_mask};
+}
+
+std::pair<cv::Mat, cv::Mat> unsharp_mask(const cv::Mat& image, float alpha) {
+    cv::Mat blurred, Gmask, I_unsharpened;
+    cv::GaussianBlur(image, blurred, cv::Size(5, 5), 0);
+    cv::subtract(image, blurred, Gmask);
+    cv::addWeighted(image, 1.0, Gmask, alpha, 0, I_unsharpened);
+    return {I_unsharpened, Gmask};
 }

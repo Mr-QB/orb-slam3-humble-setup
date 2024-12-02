@@ -41,7 +41,8 @@ RUN apt-get update && apt-get install -y \
     tmux \
     wget \
     xorg-dev \
-    zsh
+    zsh \
+    git
 
 RUN pip3 install setuptools==58.2.0
 
@@ -79,4 +80,14 @@ RUN echo "bashcompinit" >> /root/.zshrc
 RUN echo 'eval "$(register-python-argcomplete3 ros2)"' >> /root/.zshrc
 RUN echo 'eval "$(register-python-argcomplete3 colcon)"' >> /root/.zshrc
 
-# CMD [ "tmuxinator", "start", "-p", "/root/.session.yml" ]
+###
+COPY . ./humble_dev_ws/src
+# RUN add-apt-repository "deb http://security.ubuntu.com/ubuntu xenial-security main"
+# RUN apt update
+RUN apt-get install build-essential
+RUN apt-get install cmake git libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev
+RUN apt-get install python-dev python-numpy libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev libdc1394-22-dev libjasper-dev
+RUN apt-get install libglew-dev libboost-all-dev libssl-dev
+RUN apt install libeigen3-dev
+
+CMD [ "tmuxinator", "start", "-p", "/root/.session.yml" ]
